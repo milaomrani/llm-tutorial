@@ -35,7 +35,8 @@ async def start_chat():
         interaction.append({"role": "user",
                             "content": input_message})
         
-        response = ollama.chat(model="deepseek-r1:8b",
+        # response = ollama.chat(model="deepseek-r1:8b",
+        response = ollama.chat(model="llama3.1:latest",
                               messages=interaction)
         
         interaction.append({"role": "assistant",
@@ -124,7 +125,8 @@ async def chat():
         
         try:
             response = ollama.chat(
-                model="deepseek-r1:8b",
+                # model="deepseek-r1:8b",
+                model="llama3.1:latest",
                 messages=interaction
             )
             

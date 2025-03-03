@@ -4,7 +4,8 @@ import ollama
 def get_ollama_response(messages):
     try:
         response = ollama.chat(
-            model="deepseek-r1:8b",
+            # model="deepseek-r1:8b",
+            model="llama3.1:latest",
             messages=messages
         )
         return response["message"]["content"]
