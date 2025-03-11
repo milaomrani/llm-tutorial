@@ -61,7 +61,12 @@ class LocalOllamaModel:
             
             # Check if the requested model is in the list
             models = response.json().get("models", [])
-            available_models = [model.get("name") for model in models]
+            available_models = []
+            
+            # Properly extract model names from Ollama API response
+            for model in models:
+                if isinstance(model, dict) and "name" in model:
+                    available_models.append(model["name"])
             
             if self.model_name not in available_models:
                 logging.warning(f"Model {self.model_name} not found in available models: {available_models}")
@@ -200,24 +205,24 @@ class PropertyFindingAgent:
         location_string = f"{city}, {province}" if province != "All Canada" else f"{city}, Canada"
         search_location = f"{formatted_location}-{formatted_province}" if province != "All Canada" else formatted_location
         
-        # Use safer string formatting for URLs
+        # Use safer string formatting for URLs - Make them more generic to increase chances of finding properties
         urls = [
-            f"https://www.realtor.ca/map#view=list&Sort=6-D&PropertyTypeGroupID=1&PropertySearchTypeId=1&TransactionTypeId=2&PriceMin=0&PriceMax={int(max_price*1000)}&Currency=CAD",
-            f"https://www.royallepage.ca/en/search/homes/{search_location}/"
+            f"https://www.realtor.ca/map#view=list&Sort=6-D&PropertyTypeGroupID=1&PropertySearchTypeId=1&TransactionTypeId=2&Currency=CAD",
+            f"https://www.royallepage.ca/en/search/homes/"
         ]
         
-        # Add province-specific URLs
+        # Add province-specific URLs but make them more generic
         if province == "Quebec":
             # Quebec-specific URLs (Centris)
             urls.extend([
-                f"https://www.centris.ca/en/properties~for-sale~{formatted_location}?view=Thumbnail",
-                f"https://www.centris.ca/fr/proprietes-residentielles~a-vendre~{formatted_location}"
+                f"https://www.centris.ca/en/properties~for-sale",
+                f"https://www.centris.ca/fr/proprietes-residentielles~a-vendre"
             ])
         elif province == "Ontario":
             # Ontario-specific URLs
             urls.extend([
-                f"https://condos.ca/search?for=sale&search_by={formatted_location}",
-                f"https://www.zoocasa.com/ontario-real-estate?location={formatted_location}"
+                f"https://condos.ca/search?for=sale",
+                f"https://www.zoocasa.com/ontario-real-estate"
             ])
         elif province == "British Columbia":
             # BC-specific URLs
@@ -242,27 +247,45 @@ class PropertyFindingAgent:
             raw_response = self.firecrawl.extract(
                 urls=urls,
                 params={
-                    'prompt': f"""Extract ONLY 10 OR LESS different {property_category} {property_type_prompt} from {location_string} that cost less than {max_price} thousand CAD.
-                    
-                    Requirements:
-                    - Property Category: {property_category} properties only
-                    - Property Type: {property_type_prompt} only
-                    - Location: {location_string}
-                    - Maximum Price: ${max_price} thousand CAD (${int(max_price)} thousand or ${max_price/1000:.2f} million)
-                    - Include complete property details with exact location
-                    - IMPORTANT: Return data for at least 3 different properties. MAXIMUM 10.
-                    - Format as a list of properties with their respective details
-                    - ENSURE all prices are in CAD
-                    {f"- Additional requirements: {additional_requirements}" if additional_requirements else ""}
-                    """,
+                    'prompt': f"""Extract properties that match these criteria as closely as possible:
+        
+        Requirements:
+        - Property Category: {property_category} properties
+        - Property Type: {property_type_prompt} or similar types
+        - Location: {location_string} or nearby areas
+        - Price Range: Up to ${max_price} thousand CAD
+        - Include complete property details with location
+        - If exact matches aren't available, include similar properties
+        - Format as a list of properties with their respective details
+        - ENSURE all prices are in CAD
+        {f"- Additional requirements to consider: {additional_requirements}" if additional_requirements else ""}
+        """,
                     'schema': PropertiesResponse.model_json_schema()
                 }
             )
             
             self.logger.info("Successfully retrieved property data")
             
+            # Log the raw response for debugging
+            self.logger.info(f"Raw response excerpt: {str(raw_response)[:200]}...")
+
+            # Add fallback when no properties found
             if isinstance(raw_response, dict) and raw_response.get('success'):
                 properties = raw_response['data'].get('properties', [])
+                if not properties:
+                    self.logger.warning("No properties found in response, using fallback")
+                    # Use the model to generate analysis based on general market knowledge
+                    return self._run_model(f"""
+        As a Canadian real estate expert, please provide:
+        
+        1. Analysis of the {property_type} market in {location_string} in the ${max_price}k CAD range
+        2. Typical features and prices for {property_type}s in this area
+        3. Market trends affecting this property type and location
+        4. Investment potential and considerations
+        5. Alternative neighborhoods or property types to consider
+        
+        Format your response with clear headings and helpful insights.
+        """)
             else:
                 properties = []
                 self.logger.warning(f"Invalid response format or no properties found: {raw_response}")
@@ -421,15 +444,16 @@ class PropertyFindingAgent:
             
         return f"No price trends data available for {city}, Canada"
     
-    def answer_question(self, question: str, city: str, property_type: str, max_price: float) -> str:
+    def answer_question(self, question: str, city: str, property_type: str, max_price: float, province: str = "All Canada") -> str:
         """Answer specific questions about real estate in the given city"""
         # Sanitize input
         question = self._sanitize_input(question)
         city = self._sanitize_input(city)
+        province = self._sanitize_input(province)
         
         self.logger.info(f"Answering question: {question} for {city}")
         
-        location_string = f"{city}, {province}" if 'province' in locals() and province != "All Canada" else f"{city}, Canada"
+        location_string = f"{city}, {province}" if province != "All Canada" else f"{city}, Canada"
         
         prompt = f"""As a Canadian real estate expert, please answer the following question about {location_string} real estate:
 
@@ -538,8 +562,8 @@ def main():
         else:
             model_id = st.selectbox(
                 "Choose OpenAI Model",
-                options=["gpt-4-mini", "gpt-3.5-turbo", "gpt-4o", "gpt-4"],
-                index=0,  # Set gpt-4-mini as default
+                options=["gpt-4o-mini", "gpt-3.5-turbo", "gpt-4o", "gpt-4"],
+                index=0,  # Set gpt-4o-mini as default
                 help="Select the AI model to use"
             )
             st.session_state.model_id = model_id
